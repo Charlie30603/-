@@ -1,0 +1,1544 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <title>YouTube 直播開票與投票即時擷取儀表板</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Tesseract.js (OCR) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" onload="if(window.lucide)window.lucide.createIcons();" onerror="var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js';s.onload=function(){if(window.lucide)window.lucide.createIcons();};document.head.appendChild(s);"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+    body {
+      font-family: 'Inter', 'Noto Sans TC', sans-serif;
+      background-color: #0b0f19;
+      color: #f1f5f9;
+    }
+    .tabular-nums {
+      font-variant-numeric: tabular-nums;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.5);
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+    canvas#captureCanvas, canvas#ytOverlayCanvas {
+      touch-action: none;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+  <!-- Toast Notification Banner -->
+  <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <!-- Top Navigation Bar -->
+  <header class="bg-slate-900/90 border-b border-slate-800 sticky top-0 z-40 backdrop-blur-md">
+    <div class="max-w-[1600px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-rose-500 to-amber-500 flex items-center justify-center shadow-lg shadow-rose-500/20">
+          <i data-lucide="tv" class="w-5 h-5 text-white"></i>
+        </div>
+        <div>
+          <h1 class="font-bold text-base sm:text-lg tracking-tight text-white flex items-center gap-2">
+            YouTube 直播開票即時擷取戰情室
+            <span id="liveStatusBadge" class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+              <span class="w-2 h-2 rounded-full bg-slate-500"></span>
+              待機中
+            </span>
+          </h1>
+          <p class="text-xs text-slate-400 hidden sm:block">支援上傳開票影片/截圖、模擬開票測試與 YouTube 聊天室即時互動計票</p>
+        </div>
+      </div>
+
+      <!-- Mode Switcher & Actions -->
+      <div class="flex items-center gap-2 sm:gap-3">
+        <div class="bg-slate-950 p-1 rounded-lg border border-slate-800 flex text-xs sm:text-sm font-medium">
+          <button id="btnModeOCR" class="px-3 py-1.5 rounded-md bg-indigo-600 text-white shadow transition flex items-center gap-1.5">
+            <i data-lucide="scan-line" class="w-4 h-4"></i>
+            <span>畫面 OCR 擷取</span>
+          </button>
+          <button id="btnModeChat" class="px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition flex items-center gap-1.5">
+            <i data-lucide="message-square-text" class="w-4 h-4"></i>
+            <span>聊天室互動計票</span>
+          </button>
+        </div>
+
+        <button id="btnExportCSV" class="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs sm:text-sm font-medium border border-slate-700 transition flex items-center gap-1.5" title="匯出開票紀錄 CSV">
+          <i data-lucide="download" class="w-4 h-4 text-emerald-400"></i>
+          <span class="hidden md:inline">匯出 CSV</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <main class="flex-1 max-w-[1600px] w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- Left Column: Input Source & Capture Config (7 cols) -->
+    <div class="lg:col-span-7 flex flex-col gap-6">
+
+      <!-- MODE 1: SCREEN OCR PANEL -->
+      <section id="panelOCR" class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 sm:p-5 flex flex-col gap-4 shadow-xl">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+          <div>
+            <h2 class="text-base font-bold text-white flex items-center gap-2">
+              <i data-lucide="monitor" class="w-4 h-4 text-indigo-400"></i>
+              YouTube 直播來源與直接框選 (OCR)
+            </h2>
+            <p class="text-xs text-slate-400 mt-0.5">可上傳直播錄影/截圖或啟動模擬開票測試，框選候選人票數區域進行自動數字辨識</p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <label for="fileUploadInput" class="cursor-pointer px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition flex items-center gap-1.5">
+              <i data-lucide="upload" class="w-3.5 h-3.5 text-sky-400"></i>
+              上傳截圖/影片
+            </label>
+            <input type="file" id="fileUploadInput" accept="image/*,video/*" class="hidden" />
+            <button id="btnStartMockStream" class="px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs font-medium border border-amber-500/30 transition flex items-center gap-1.5">
+              <i data-lucide="play-circle" class="w-3.5 h-3.5"></i>
+              模擬開票測試
+            </button>
+          </div>
+        </div>
+
+        <!-- Local file:// Origin Warning Banner -->
+        <div id="protocolWarningBox" class="hidden bg-amber-950/80 border border-amber-500/50 rounded-lg p-3.5 text-xs text-amber-100 flex flex-col gap-2">
+          <div class="flex items-start justify-between gap-2">
+            <div class="flex items-center gap-2 font-bold text-amber-300 text-sm">
+              <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0"></i>
+              <span>偵測到本機檔案 (file://) 開啟模式 — YouTube 內嵌可能出現錯誤 153</span>
+            </div>
+            <button id="btnCloseProtoWarn" class="text-amber-400 hover:text-white">
+              <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+          </div>
+          <p class="leading-relaxed text-amber-100/90">
+            當直接雙擊本機 HTML（<code class="bg-black/40 px-1 rounded">file:///</code>）時，瀏覽器不會送出 <code class="bg-black/40 px-1 rounded">Referer</code> 標頭。建議部署到 GitHub Pages 或用本機 HTTP 伺服器開啟：
+          </p>
+          <div class="bg-black/50 p-2.5 rounded border border-slate-700 font-mono text-[11px] text-emerald-300">
+            python3 -m http.server 8000 &nbsp;&nbsp;# 啟動後請開啟 http://localhost:8000
+          </div>
+        </div>
+
+        <!-- Arbitrary YouTube URL Loader -->
+        <div class="bg-slate-950/90 border border-slate-800 rounded-lg p-3 flex flex-col gap-3">
+          <div class="flex flex-col sm:flex-row gap-2">
+            <div class="relative flex-1">
+              <i data-lucide="youtube" class="w-4 h-4 text-rose-500 absolute left-3 top-1/2 -translate-y-1/2"></i>
+              <input id="ytUrlInput" type="text" placeholder="貼上任意 YouTube 網址 (例如 https://www.youtube.com/watch?v=... 或 youtu.be/...)" class="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500" />
+            </div>
+            <select id="ytPlayerEngine" class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-medium focus:outline-none focus:border-indigo-500">
+              <option value="official">YouTube 官方播放器</option>
+              <option value="nocookie">YouTube No-Cookie 網域</option>
+            </select>
+            <button id="btnLoadYtUrl" class="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold transition flex items-center justify-center gap-1.5 shrink-0">
+              <i data-lucide="play" class="w-3.5 h-3.5"></i>
+              載入直播
+            </button>
+            <button id="btnOpenPopupYt" class="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition flex items-center justify-center gap-1.5 shrink-0" title="若該頻道禁止嵌入，可開啟獨立原生視窗">
+              <i data-lucide="external-link" class="w-3.5 h-3.5 text-emerald-400"></i>
+              原生小視窗
+            </button>
+          </div>
+
+          <!-- Embedded YouTube Player WITH Direct Interactive Overlay Canvas -->
+          <div id="ytEmbedBox" class="hidden flex-col gap-2">
+            <div id="ytPlayerStage" class="relative w-full aspect-video bg-black rounded-lg overflow-hidden border border-slate-700 shadow-inner">
+              <!-- IFrame Mount -->
+              <div id="ytPlayerMount" class="w-full h-full"></div>
+
+              <!-- Transparent Interactive Drawing Overlay directly over YouTube IFrame -->
+              <canvas id="ytOverlayCanvas" class="absolute inset-0 w-full h-full z-20 pointer-events-none"></canvas>
+
+              <!-- Active Drawing Mode Indicator inside YT Player -->
+              <div id="ytDrawingBanner" class="hidden absolute top-3 left-3 right-3 z-30 bg-indigo-600/95 text-white px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center justify-between shadow-lg backdrop-blur">
+                <span class="flex items-center gap-2">
+                  <i data-lucide="crosshair" class="w-4 h-4 animate-pulse"></i>
+                  <span id="ytDrawingTargetLabel">請直接在 YouTube 畫面上拖曳框選「候選人 1」的票數區域...</span>
+                </span>
+                <button id="btnCancelYtDraw" class="px-2 py-0.5 bg-black/40 hover:bg-black/60 rounded text-xs">取消</button>
+              </div>
+            </div>
+
+            <!-- Action Bar below Embedded YouTube Player -->
+            <div class="flex flex-wrap items-center justify-between gap-2 bg-slate-900/95 px-3 py-2 rounded-lg border border-slate-800 text-xs">
+              <div class="flex items-center gap-2 text-slate-300">
+                <span id="tabCaptureIndicator" class="inline-flex items-center gap-1.5 text-slate-300 font-medium">
+                  <i data-lucide="tv-2" class="w-3.5 h-3.5 text-rose-400 shrink-0"></i>
+                  <span>即時監看直播畫面（已停用螢幕共享；OCR 辨識請使用下方上傳影片/截圖或模擬開票）</span>
+                </span>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button id="btnToggleOverlayVisibility" class="px-2.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition" title="顯示或隱藏播放器上的紅綠框線">
+                  隱藏框線
+                </button>
+                <button id="btnSwitchDomain" class="px-2.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+                  切換網域
+                </button>
+                <button id="btnCloseYtEmbed" class="px-2.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition">
+                  關閉
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Secondary Preview / Local File / Mock Broadcast Canvas -->
+        <div id="secondaryCanvasWrapper" class="relative w-full aspect-video bg-slate-950 rounded-lg border border-slate-800 overflow-hidden flex items-center justify-center group">
+          <video id="sourceVideo" class="hidden" autoplay muted playsinline loop></video>
+          <canvas id="captureCanvas" class="w-full h-full object-contain"></canvas>
+
+          <!-- Empty State Overlay -->
+          <div id="emptyCanvasHint" class="absolute inset-0 flex flex-col items-center justify-center text-center p-6 pointer-events-none">
+            <div class="w-12 h-12 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center mb-3 text-slate-400">
+              <i data-lucide="crop" class="w-6 h-6"></i>
+            </div>
+            <p class="text-sm font-semibold text-slate-300">OCR 即時擷取預覽區</p>
+            <p class="text-xs text-slate-500 max-w-md mt-1">
+              • 點擊上方「上傳截圖/影片」匯入開票畫面，或點擊「模擬開票測試」產生即時開票畫面<br/>
+              • 載入畫面後，點擊下方候選人的「框選票數區」並在此區域拖曳框選數字
+            </p>
+          </div>
+
+          <!-- Active Drawing Mode Indicator on Secondary Canvas -->
+          <div id="drawingBanner" class="hidden absolute top-3 left-3 right-3 bg-indigo-600/95 text-white px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center justify-between shadow-lg backdrop-blur">
+            <span class="flex items-center gap-2">
+              <i data-lucide="crosshair" class="w-4 h-4 animate-pulse"></i>
+              <span id="drawingTargetLabel">請在畫面上拖曳滑鼠框選「候選人 1」的得票數字區域...</span>
+            </span>
+            <button id="btnCancelDraw" class="px-2 py-0.5 bg-black/30 hover:bg-black/50 rounded text-xs">取消</button>
+          </div>
+        </div>
+
+        <!-- OCR Control Strip -->
+        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-slate-950/70 p-3 rounded-lg border border-slate-800/80 items-center">
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1">擷取頻率 (秒)</label>
+            <select id="ocrIntervalSelect" class="w-full bg-slate-900 border border-slate-700 rounded-md px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500">
+              <option value="2000">每 2 秒 (高頻即時)</option>
+              <option value="3000" selected>每 3 秒 (推薦平衡)</option>
+              <option value="5000">每 5 秒 (省電穩定)</option>
+              <option value="10000">每 10 秒 (低頻追蹤)</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1">影像二值化強化 (抗反光)</label>
+            <div class="flex items-center gap-2">
+              <input id="thresholdRange" type="range" min="80" max="220" value="145" class="w-full accent-indigo-500" />
+              <span id="thresholdVal" class="text-xs font-mono text-slate-300 w-8">145</span>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2 pt-4 sm:pt-3">
+            <input id="chkMonotonic" type="checkbox" checked class="rounded bg-slate-900 border-slate-700 text-indigo-500 focus:ring-0" />
+            <label for="chkMonotonic" class="text-xs text-slate-300 cursor-pointer select-none" title="開啟後，若 OCR 偶發漏讀一位數導致票數變小，系統會自動忽略該次異常值">
+              防誤判保護 (票數只增不減)
+            </label>
+          </div>
+
+          <div class="flex justify-end gap-2 pt-2 sm:pt-3">
+            <button id="btnToggleOCR" class="w-full sm:w-auto px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-600/20">
+              <i data-lucide="play" class="w-3.5 h-3.5"></i>
+              <span>啟動自動 OCR</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- MODE 2: YOUTUBE LIVE CHAT SCANNER PANEL -->
+      <section id="panelChat" class="hidden bg-slate-900/80 border border-slate-800 rounded-xl p-4 sm:p-5 flex flex-col gap-4 shadow-xl">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+          <div>
+            <h2 class="text-base font-bold text-white flex items-center gap-2">
+              <i data-lucide="radio" class="w-4 h-4 text-rose-400"></i>
+              YouTube 直播聊天室關鍵字即時統計
+            </h2>
+            <p class="text-xs text-slate-400 mt-0.5">透過 YouTube Data API v3 抓取留言，自動統計觀眾投票指令（如 +1、1號、支持A）</p>
+          </div>
+          <button id="btnSimulateChat" class="px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs font-medium border border-rose-500/30 transition flex items-center gap-1.5">
+            <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+            啟動模擬聊天室湧入
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">YouTube Data API Key</label>
+            <input id="ytApiKey" type="password" placeholder="AIzaSy..." class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-rose-500" />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">直播影片網址或 Video ID</label>
+            <input id="ytVideoId" type="text" placeholder="例如: jfKfPfyJRdk 或完整網址" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-rose-500" />
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-3 bg-slate-950/70 p-3 rounded-lg border border-slate-800">
+          <div class="flex items-center gap-4">
+            <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+              <input id="chkDedupeUser" type="checkbox" checked class="rounded bg-slate-900 border-slate-700 text-rose-500" />
+              每人限投一票 (依頻道 ID 去重)
+            </label>
+          </div>
+          <button id="btnConnectChat" class="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition flex items-center gap-1.5">
+            <i data-lucide="plug" class="w-3.5 h-3.5"></i>
+            連接直播聊天室
+          </button>
+        </div>
+
+        <!-- Live Chat Feed Preview -->
+        <div class="bg-slate-950 rounded-lg border border-slate-800 p-3 h-48 overflow-y-auto custom-scrollbar flex flex-col gap-1.5" id="chatFeedContainer">
+          <div class="text-xs text-slate-500 text-center my-auto">尚未連接聊天室，可輸入 API Key 或點擊上方「啟動模擬聊天室湧入」進行測試</div>
+        </div>
+      </section>
+
+      <!-- Candidate & ROI Configuration Table -->
+      <section class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 sm:p-5 flex flex-col gap-4 shadow-xl">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-base font-bold text-white flex items-center gap-2">
+              <i data-lucide="users" class="w-4 h-4 text-emerald-400"></i>
+              候選人 / 選項與擷取規則設定
+            </h2>
+            <p class="text-xs text-slate-400 mt-0.5">點擊「框選票數區」後，可直接在上方嵌入的 YouTube 畫面上拖曳畫框</p>
+          </div>
+          <button id="btnAddCandidate" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold border border-slate-700 transition flex items-center gap-1">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+            新增選項
+          </button>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="border-b border-slate-800 text-[11px] uppercase text-slate-400">
+                <th class="py-2 px-2">代表色</th>
+                <th class="py-2 px-2">候選人 / 選項名稱</th>
+                <th class="py-2 px-2">OCR 畫面框選區</th>
+                <th class="py-2 px-2">聊天室關鍵字 (逗號分隔)</th>
+                <th class="py-2 px-2 text-right">手動修正票數</th>
+                <th class="py-2 px-2 text-center">操作</th>
+              </tr>
+            </thead>
+            <tbody id="candidateConfigBody" class="divide-y divide-slate-800/60 text-xs">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- Right Column: Real-Time Leaderboard, Chart & Logs (5 cols) -->
+    <div class="lg:col-span-5 flex flex-col gap-6">
+
+      <!-- Total Summary & Lead Margin -->
+      <section class="bg-slate-900/90 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-xl flex flex-col gap-4">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">即時開票戰況總覽</span>
+          <span id="lastUpdatedTime" class="text-xs font-mono text-slate-400">最後更新: --:--:--</span>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-slate-950/90 border border-slate-800/90 rounded-lg p-3.5">
+            <div class="text-xs text-slate-400">總有效票數</div>
+            <div id="totalVotesDisplay" class="text-2xl sm:text-3xl font-black text-white tabular-nums mt-1">0</div>
+          </div>
+          <div class="bg-slate-950/90 border border-slate-800/90 rounded-lg p-3.5">
+            <div class="text-xs text-slate-400">領先差距 (第1 vs 第2)</div>
+            <div id="leadMarginDisplay" class="text-2xl sm:text-3xl font-black text-amber-400 tabular-nums mt-1">0</div>
+          </div>
+        </div>
+
+        <!-- Candidate Progress Cards -->
+        <div id="scoreboardList" class="flex flex-col gap-3 mt-1">
+          <!-- Populated by JS -->
+        </div>
+      </section>
+
+      <!-- Trend Line Chart -->
+      <section class="bg-slate-900/90 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-xl flex flex-col gap-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2">
+            <i data-lucide="trending-up" class="w-4 h-4 text-sky-400"></i>
+            得票成長趨勢曲線
+          </h3>
+          <button id="btnResetStats" class="text-xs text-slate-400 hover:text-rose-400 transition">歸零重計</button>
+        </div>
+        <div class="relative h-56 w-full">
+          <canvas id="voteTrendChart"></canvas>
+        </div>
+      </section>
+
+      <!-- OCR & System Recognition Logs -->
+      <section class="bg-slate-900/90 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-xl flex flex-col gap-3 flex-1">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2">
+            <i data-lucide="terminal" class="w-4 h-4 text-purple-400"></i>
+            即時辨識與驗證日誌
+          </h3>
+          <span id="ocrEngineStatus" class="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">OCR 引擎就緒</span>
+        </div>
+        <div id="logContainer" class="bg-slate-950 border border-slate-800 rounded-lg p-3 h-44 overflow-y-auto custom-scrollbar font-mono text-[11px] flex flex-col gap-1.5 text-slate-300">
+          <div class="text-slate-500">[系統] 戰情室已就緒。載入 YouTube 直播後，可直接在影片上拖曳框選票數區域。</div>
+        </div>
+      </section>
+
+    </div>
+
+  </main>
+
+  <script>
+    function refreshIcons() {
+      if (window.lucide && typeof window.lucide.createIcons === 'function') {
+        try {
+          window.lucide.createIcons();
+        } catch (e) {
+          console.warn('Lucide icon render warning:', e);
+        }
+      }
+    }
+
+    // ==========================================
+    // 1. Application State
+    // ==========================================
+    const state = {
+      mode: 'ocr',
+      currentVideoId: null,
+      ytEmbedActive: false,
+      showYtOverlayBoxes: true,
+      candidates: [
+        { id: 'c1', name: '1號 陳大明', color: '#10b981', votes: 0, roi: null, keywords: ['1', '+1', '1號', '陳大明'], lastRawText: '' },
+        { id: 'c2', name: '2號 林志豪', color: '#3b82f6', votes: 0, roi: null, keywords: ['2', '+2', '2號', '林志豪'], lastRawText: '' },
+        { id: 'c3', name: '3號 張雅婷', color: '#f59e0b', votes: 0, roi: null, keywords: ['3', '+3', '3號', '張雅婷'], lastRawText: '' }
+      ],
+      drawingForCandidateId: null,
+      activeDrawSurface: null, // 'yt' or 'secondary'
+      isDragging: false,
+      dragStart: { x: 0, y: 0 },
+      dragCurrent: { x: 0, y: 0 },
+      ocrRunning: false,
+      ocrTimer: null,
+      mockStreamRunning: false,
+      mockTimer: null,
+      mockVotes: [128450, 126910, 45320],
+      chatRunning: false,
+      chatTimer: null,
+      votedUsers: new Set(),
+      historyTimestamps: [],
+      historySeries: {},
+      logsData: []
+    };
+
+    const videoEl = document.getElementById('sourceVideo');
+    const canvasEl = document.getElementById('captureCanvas');
+    const ctx = canvasEl.getContext('2d', { willReadFrequently: true });
+
+    const ytStageEl = document.getElementById('ytPlayerStage');
+    const ytOverlayCanvas = document.getElementById('ytOverlayCanvas');
+    const ytOverlayCtx = ytOverlayCanvas.getContext('2d');
+
+    const offscreenCanvas = document.createElement('canvas');
+    const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
+
+    let tesseractWorker = null;
+    let trendChart = null;
+    let uploadedImageObj = null;
+
+    // ==========================================
+    // 2. Notification & Logging Utilities
+    // ==========================================
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      const el = document.createElement('div');
+      const colors = {
+        info: 'bg-slate-800 border-slate-700 text-white',
+        success: 'bg-emerald-900/95 border-emerald-700 text-emerald-100',
+        warn: 'bg-amber-900/95 border-amber-700 text-amber-100',
+        error: 'bg-rose-900/95 border-rose-700 text-rose-100'
+      };
+      el.className = `pointer-events-auto px-4 py-2.5 rounded-lg border shadow-xl text-xs font-medium flex items-center gap-2 transition-all duration-300 ${colors[type] || colors.info}`;
+      el.textContent = message;
+      container.appendChild(el);
+      setTimeout(() => {
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 300);
+      }, 4500);
+    }
+
+    function addLog(msg, type = 'info') {
+      const container = document.getElementById('logContainer');
+      const time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+      const line = document.createElement('div');
+      let colorClass = 'text-slate-300';
+      if (type === 'success') colorClass = 'text-emerald-400';
+      if (type === 'warn') colorClass = 'text-amber-400';
+      if (type === 'error') colorClass = 'text-rose-400';
+      line.className = colorClass;
+      line.textContent = `[${time}] ${msg}`;
+      container.prepend(line);
+      if (container.children.length > 80) {
+        container.removeChild(container.lastChild);
+      }
+    }
+
+    function setLiveBadge(active, label) {
+      const badge = document.getElementById('liveStatusBadge');
+      if (active) {
+        badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/40';
+        badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>${label}`;
+      } else {
+        badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700';
+        badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-500"></span>${label}`;
+      }
+    }
+
+    // ==========================================
+    // 3. YouTube URL Loader & Pop-out Window
+    // ==========================================
+    function isLocalFileOrigin() {
+      return window.location.protocol === 'file:' || !window.location.origin || window.location.origin === 'null';
+    }
+
+    function checkProtocolEnvironment() {
+      if (isLocalFileOrigin()) {
+        document.getElementById('protocolWarningBox').classList.remove('hidden');
+        addLog('偵測到本機 file:// 開啟模式。建議透過 GitHub Pages 或 localhost 開啟以獲得完整 Referer', 'warn');
+      }
+    }
+
+    function extractYouTubeVideoId(input) {
+      if (!input) return null;
+      const trimmed = input.trim();
+      if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
+      try {
+        const url = new URL(trimmed.startsWith('http') ? trimmed : 'https://' + trimmed);
+        if (url.hostname.includes('youtu.be')) {
+          const id = url.pathname.replace('/', '').split('/')[0];
+          return id && id.length === 11 ? id : null;
+        }
+        if (url.searchParams.has('v')) {
+          const id = url.searchParams.get('v');
+          return id && id.length === 11 ? id : null;
+        }
+        const pathParts = url.pathname.split('/').filter(Boolean);
+        if (pathParts.length >= 2 && ['live', 'embed', 'shorts', 'v'].includes(pathParts[0])) {
+          const id = pathParts[1];
+          return id && id.length === 11 ? id : null;
+        }
+      } catch (e) {
+        const match = trimmed.match(/(?:v=|\/live\/|youtu\.be\/|\/embed\/|\/shorts\/)([a-zA-Z0-9_-]{11})/);
+        if (match) return match[1];
+      }
+      return null;
+    }
+
+    function mountYouTubePlayer(videoId, mode) {
+      state.currentVideoId = videoId;
+      state.ytEmbedActive = true;
+      const mount = document.getElementById('ytPlayerMount');
+      const embedBox = document.getElementById('ytEmbedBox');
+
+      embedBox.classList.remove('hidden');
+      embedBox.classList.add('flex');
+      document.getElementById('ytVideoId').value = videoId;
+
+      mount.innerHTML = '';
+      const iframe = document.createElement('iframe');
+      iframe.className = 'w-full h-full';
+      iframe.setAttribute('frameborder', '0');
+      iframe.setAttribute('allowfullscreen', 'true');
+      iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share');
+      iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+
+      const hasHttpOrigin = !isLocalFileOrigin() && window.location.protocol.startsWith('http');
+      const originParams = hasHttpOrigin
+        ? `&origin=${encodeURIComponent(window.location.origin)}&widget_referrer=${encodeURIComponent(window.location.href)}`
+        : '';
+
+      if (mode === 'nocookie') {
+        iframe.src = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=1&rel=0&playsinline=1&enablejsapi=1${originParams}`;
+        addLog(`已載入 YouTube No-Cookie 播放器 (ID: ${videoId})，可直接點「框選票數區」在畫面上畫框`, 'info');
+      } else {
+        iframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&rel=0&playsinline=1&enablejsapi=1${originParams}`;
+        addLog(`已載入 YouTube 官方播放器 (ID: ${videoId})，可直接點「框選票數區」在畫面上畫框`, 'info');
+      }
+
+      mount.appendChild(iframe);
+      refreshIcons();
+    }
+
+    function openNativeYouTubePopup() {
+      const rawUrl = document.getElementById('ytUrlInput').value;
+      const videoId = extractYouTubeVideoId(rawUrl) || state.currentVideoId;
+      const targetUrl = videoId
+        ? `https://www.youtube.com/watch?v=${videoId}`
+        : 'https://www.youtube.com';
+
+      window.open(targetUrl, 'YouTubeLivePopup', 'width=960,height=540,menubar=no,toolbar=no,location=yes,status=no');
+      addLog('已開啟原生 YouTube 獨立視窗', 'success');
+      showToast('已開啟原生 YouTube 小視窗！', 'success');
+    }
+
+    document.getElementById('btnLoadYtUrl').addEventListener('click', () => {
+      const rawUrl = document.getElementById('ytUrlInput').value;
+      const videoId = extractYouTubeVideoId(rawUrl);
+      if (!videoId) {
+        showToast('無法辨識的 YouTube 網址，請確認格式正確', 'warn');
+        return;
+      }
+      const mode = document.getElementById('ytPlayerEngine').value;
+      mountYouTubePlayer(videoId, mode);
+      showToast('已載入直播！現在可直接點擊下方「框選票數區」在影片上圈選', 'success');
+    });
+
+    document.getElementById('ytPlayerEngine').addEventListener('change', (e) => {
+      if (state.currentVideoId) {
+        mountYouTubePlayer(state.currentVideoId, e.target.value);
+      }
+    });
+
+    document.getElementById('btnSwitchDomain').addEventListener('click', () => {
+      const select = document.getElementById('ytPlayerEngine');
+      select.value = select.value === 'official' ? 'nocookie' : 'official';
+      if (state.currentVideoId) {
+        mountYouTubePlayer(state.currentVideoId, select.value);
+      }
+    });
+
+    document.getElementById('btnOpenPopupYt').addEventListener('click', openNativeYouTubePopup);
+
+    document.getElementById('btnToggleOverlayVisibility').addEventListener('click', (e) => {
+      state.showYtOverlayBoxes = !state.showYtOverlayBoxes;
+      e.currentTarget.textContent = state.showYtOverlayBoxes ? '隱藏框線' : '顯示框線';
+    });
+
+    document.getElementById('btnCloseProtoWarn').addEventListener('click', () => {
+      document.getElementById('protocolWarningBox').classList.add('hidden');
+    });
+
+    document.getElementById('btnCloseYtEmbed').addEventListener('click', () => {
+      state.ytEmbedActive = false;
+      const embedBox = document.getElementById('ytEmbedBox');
+      document.getElementById('ytPlayerMount').innerHTML = '';
+      embedBox.classList.add('hidden');
+      embedBox.classList.remove('flex');
+    });
+
+    // ==========================================
+    // 4. Initialize Chart.js & Tesseract OCR
+    // ==========================================
+    function initChart() {
+      const chartCanvas = document.getElementById('voteTrendChart').getContext('2d');
+      trendChart = new Chart(chartCanvas, {
+        type: 'line',
+        data: { labels: [], datasets: [] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { labels: { color: '#cbd5e1', font: { size: 11 } } }
+          },
+          scales: {
+            x: { ticks: { color: '#64748b', maxTicksLimit: 8, font: { size: 10 } }, grid: { color: 'rgba(51, 65, 85, 0.3)' } },
+            y: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(51, 65, 85, 0.3)' } }
+          }
+        }
+      });
+      syncChartDatasets();
+    }
+
+    function syncChartDatasets() {
+      if (!trendChart) return;
+      trendChart.data.datasets = state.candidates.map(c => {
+        if (!state.historySeries[c.id]) {
+          state.historySeries[c.id] = new Array(state.historyTimestamps.length).fill(c.votes);
+        }
+        return {
+          label: c.name,
+          data: state.historySeries[c.id],
+          borderColor: c.color,
+          backgroundColor: c.color + '33',
+          borderWidth: 2,
+          pointRadius: 2,
+          tension: 0.25
+        };
+      });
+      trendChart.update();
+    }
+
+    function recordChartPoint() {
+      const now = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+      state.historyTimestamps.push(now);
+      if (state.historyTimestamps.length > 30) state.historyTimestamps.shift();
+      state.candidates.forEach(c => {
+        if (!state.historySeries[c.id]) state.historySeries[c.id] = [];
+        state.historySeries[c.id].push(c.votes);
+        if (state.historySeries[c.id].length > 30) state.historySeries[c.id].shift();
+      });
+      trendChart.data.labels = state.historyTimestamps;
+      syncChartDatasets();
+    }
+
+    async function initTesseract() {
+      const statusEl = document.getElementById('ocrEngineStatus');
+      try {
+        statusEl.textContent = '載入 OCR 模型中...';
+        tesseractWorker = await Tesseract.createWorker('eng');
+        await tesseractWorker.setParameters({ tessedit_char_whitelist: '0123456789,' });
+        statusEl.textContent = 'OCR 數字辨識就緒';
+        statusEl.className = 'text-[11px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800';
+        addLog('Tesseract OCR 數字辨識引擎載入完成', 'success');
+      } catch (err) {
+        statusEl.textContent = 'OCR 載入失敗';
+        statusEl.className = 'text-[11px] px-2 py-0.5 rounded bg-rose-950 text-rose-400';
+        addLog('OCR 引擎初始化失敗: ' + err.message, 'error');
+      }
+    }
+
+    // ==========================================
+    // 5. Local File Upload & Mock Broadcast (No Screen Sharing)
+    // ==========================================
+    document.getElementById('fileUploadInput').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      stopMockStream();
+
+      const fileURL = URL.createObjectURL(file);
+      document.getElementById('emptyCanvasHint').classList.add('hidden');
+
+      if (file.type.startsWith('image/')) {
+        videoEl.removeAttribute('src');
+        const img = new Image();
+        img.onload = () => {
+          uploadedImageObj = img;
+          setLiveBadge(true, '已載入開票截圖');
+          addLog(`已載入圖片「${file.name}」，請框選票數區域`, 'success');
+          showToast('截圖載入成功！請拖曳框選票數區', 'success');
+        };
+        img.src = fileURL;
+      } else if (file.type.startsWith('video/')) {
+        uploadedImageObj = null;
+        videoEl.src = fileURL;
+        await videoEl.play();
+        setLiveBadge(true, '播放本機開票影片');
+        addLog(`已載入影片「${file.name}」，請框選票數區域`, 'success');
+        showToast('影片載入成功！請拖曳框選票數區', 'success');
+      }
+      e.target.value = '';
+    });
+
+    function startMockBroadcastStream(autoSetupROIs = false) {
+      videoEl.removeAttribute('src');
+      uploadedImageObj = null;
+
+      state.mockStreamRunning = true;
+      document.getElementById('emptyCanvasHint').classList.add('hidden');
+      setLiveBadge(true, '模擬開票直播中');
+      addLog('已啟動「模擬新聞台開票畫面」，數字將每 2 秒自動跳動', 'success');
+
+      if (autoSetupROIs) {
+        if (state.candidates[0] && !state.candidates[0].roi) state.candidates[0].roi = { x: 0.45, y: 0.30, w: 0.38, h: 0.14 };
+        if (state.candidates[1] && !state.candidates[1].roi) state.candidates[1].roi = { x: 0.45, y: 0.50, w: 0.38, h: 0.14 };
+        if (state.candidates[2] && !state.candidates[2].roi) state.candidates[2].roi = { x: 0.45, y: 0.70, w: 0.38, h: 0.14 };
+        renderCandidateConfigTable();
+      }
+
+      if (state.mockTimer) clearInterval(state.mockTimer);
+      state.mockTimer = setInterval(() => {
+        state.mockVotes[0] += Math.floor(Math.random() * 480) + 120;
+        state.mockVotes[1] += Math.floor(Math.random() * 460) + 110;
+        state.mockVotes[2] += Math.floor(Math.random() * 190) + 40;
+      }, 2000);
+    }
+
+    function stopMockStream() {
+      state.mockStreamRunning = false;
+      if (state.mockTimer) {
+        clearInterval(state.mockTimer);
+        state.mockTimer = null;
+      }
+    }
+
+    function drawMockBroadcastFrame(targetCtx, width, height) {
+      const grad = targetCtx.createLinearGradient(0, 0, width, height);
+      grad.addColorStop(0, '#0f172a');
+      grad.addColorStop(1, '#1e1b4b');
+      targetCtx.fillStyle = grad;
+      targetCtx.fillRect(0, 0, width, height);
+
+      targetCtx.fillStyle = '#dc2626';
+      targetCtx.fillRect(0, 0, width, height * 0.13);
+      targetCtx.fillStyle = '#ffffff';
+      targetCtx.font = `bold ${Math.round(height * 0.055)}px "Noto Sans TC", sans-serif`;
+      targetCtx.textBaseline = 'middle';
+      targetCtx.fillText('LIVE 2026 全國大選即時開票特別報導', width * 0.04, height * 0.065);
+
+      const rows = [
+        { name: '1號 陳大明', color: '#10b981', votes: state.mockVotes[0], y: height * 0.28 },
+        { name: '2號 林志豪', color: '#3b82f6', votes: state.mockVotes[1], y: height * 0.48 },
+        { name: '3號 張雅婷', color: '#f59e0b', votes: state.mockVotes[2], y: height * 0.68 }
+      ];
+
+      rows.forEach(r => {
+        const boxH = height * 0.16;
+        targetCtx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+        targetCtx.fillRect(width * 0.05, r.y, width * 0.9, boxH);
+
+        targetCtx.fillStyle = r.color;
+        targetCtx.fillRect(width * 0.05, r.y, width * 0.025, boxH);
+
+        targetCtx.fillStyle = '#0f172a';
+        targetCtx.font = `bold ${Math.round(height * 0.052)}px "Noto Sans TC", sans-serif`;
+        targetCtx.fillText(r.name, width * 0.10, r.y + boxH * 0.52);
+
+        targetCtx.fillStyle = '#000000';
+        targetCtx.font = `900 ${Math.round(height * 0.072)}px "Inter", monospace`;
+        targetCtx.textAlign = 'right';
+        targetCtx.fillText(r.votes.toLocaleString('en-US'), width * 0.81, r.y + boxH * 0.54);
+        targetCtx.textAlign = 'left';
+
+        targetCtx.fillStyle = '#475569';
+        targetCtx.font = `bold ${Math.round(height * 0.045)}px "Noto Sans TC", sans-serif`;
+        targetCtx.fillText('票', width * 0.83, r.y + boxH * 0.54);
+      });
+
+      targetCtx.fillStyle = '#020617';
+      targetCtx.fillRect(0, height * 0.90, width, height * 0.10);
+      targetCtx.fillStyle = '#facc15';
+      targetCtx.font = `bold ${Math.round(height * 0.038)}px "Noto Sans TC", sans-serif`;
+      targetCtx.fillText('中選會計票中心連線：各投開票所持續開票中，請鎖定本台即時更新', width * 0.04, height * 0.95);
+    }
+
+    function drawROIBoxesOnContext(targetCtx, w, h, showLabels = true) {
+      state.candidates.forEach(c => {
+        if (!c.roi) return;
+        const rx = c.roi.x * w;
+        const ry = c.roi.y * h;
+        const rw = c.roi.w * w;
+        const rh = c.roi.h * h;
+
+        targetCtx.strokeStyle = c.color;
+        targetCtx.lineWidth = 3;
+        targetCtx.strokeRect(rx, ry, rw, rh);
+
+        targetCtx.fillStyle = c.color + '24';
+        targetCtx.fillRect(rx, ry, rw, rh);
+
+        if (showLabels) {
+          const tagText = `${c.name} (${c.votes.toLocaleString()})`;
+          targetCtx.font = 'bold 16px "Noto Sans TC", sans-serif';
+          const textW = targetCtx.measureText(tagText).width + 14;
+          targetCtx.fillStyle = c.color;
+          targetCtx.fillRect(rx, Math.max(0, ry - 24), textW, 24);
+          targetCtx.fillStyle = '#ffffff';
+          targetCtx.textBaseline = 'middle';
+          targetCtx.fillText(tagText, rx + 7, Math.max(12, ry - 12));
+        }
+      });
+
+      if (state.isDragging) {
+        const x = Math.min(state.dragStart.x, state.dragCurrent.x) * w;
+        const y = Math.min(state.dragStart.y, state.dragCurrent.y) * h;
+        const bw = Math.abs(state.dragCurrent.x - state.dragStart.x) * w;
+        const bh = Math.abs(state.dragCurrent.y - state.dragStart.y) * h;
+
+        targetCtx.strokeStyle = '#ffffff';
+        targetCtx.setLineDash([6, 4]);
+        targetCtx.lineWidth = 2.5;
+        targetCtx.strokeRect(x, y, bw, bh);
+        targetCtx.setLineDash([]);
+      }
+    }
+
+    function renderCanvasLoop() {
+      // 1. Render Overlay Canvas directly over Embedded YouTube Player
+      if (state.ytEmbedActive) {
+        const rect = ytStageEl.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          if (ytOverlayCanvas.width !== Math.round(rect.width) || ytOverlayCanvas.height !== Math.round(rect.height)) {
+            ytOverlayCanvas.width = Math.round(rect.width);
+            ytOverlayCanvas.height = Math.round(rect.height);
+          }
+          ytOverlayCtx.clearRect(0, 0, ytOverlayCanvas.width, ytOverlayCanvas.height);
+          // Hide boxes momentarily while OCR is capturing tab stream so colored borders don't interfere with digits
+          if (state.showYtOverlayBoxes && !state.isCapturingFrame) {
+            drawROIBoxesOnContext(ytOverlayCtx, ytOverlayCanvas.width, ytOverlayCanvas.height, true);
+          }
+        }
+      }
+
+      // 2. Render Secondary Canvas (for Uploaded Image / Mock Stream / Cropped Preview)
+      const targetW = 1280;
+      const targetH = 720;
+      if (canvasEl.width !== targetW || canvasEl.height !== targetH) {
+        canvasEl.width = targetW;
+        canvasEl.height = targetH;
+      }
+
+      if (state.mockStreamRunning) {
+        drawMockBroadcastFrame(ctx, targetW, targetH);
+        drawROIBoxesOnContext(ctx, targetW, targetH, true);
+      } else if (uploadedImageObj) {
+        ctx.fillStyle = '#020617';
+        ctx.fillRect(0, 0, targetW, targetH);
+        const scale = Math.min(targetW / uploadedImageObj.width, targetH / uploadedImageObj.height);
+        const drawW = uploadedImageObj.width * scale;
+        const drawH = uploadedImageObj.height * scale;
+        ctx.drawImage(uploadedImageObj, (targetW - drawW) / 2, (targetH - drawH) / 2, drawW, drawH);
+        drawROIBoxesOnContext(ctx, targetW, targetH, true);
+      } else if (videoEl.readyState >= 2) {
+        ctx.drawImage(videoEl, 0, 0, targetW, targetH);
+        drawROIBoxesOnContext(ctx, targetW, targetH, true);
+      } else {
+        ctx.fillStyle = '#020617';
+        ctx.fillRect(0, 0, targetW, targetH);
+      }
+
+      requestAnimationFrame(renderCanvasLoop);
+    }
+
+    // ==========================================
+    // 6. Direct ROI Drawing on Embedded YouTube OR Secondary Canvas
+    // ==========================================
+    function getNormalizedCoordsForElement(evt, el) {
+      const rect = el.getBoundingClientRect();
+      const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
+      const clientY = evt.touches ? evt.touches[0].clientY : evt.clientY;
+      return {
+        x: Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)),
+        y: Math.max(0, Math.min(1, (clientY - rect.top) / rect.height))
+      };
+    }
+
+    function attachDrawingListeners(targetCanvas, surfaceName) {
+      targetCanvas.addEventListener('pointerdown', (e) => {
+        if (!state.drawingForCandidateId) return;
+        e.preventDefault();
+        state.isDragging = true;
+        state.activeDrawSurface = surfaceName;
+        const pos = getNormalizedCoordsForElement(e, targetCanvas);
+        state.dragStart = pos;
+        state.dragCurrent = pos;
+      });
+
+      targetCanvas.addEventListener('pointermove', (e) => {
+        if (!state.isDragging || state.activeDrawSurface !== surfaceName) return;
+        e.preventDefault();
+        state.dragCurrent = getNormalizedCoordsForElement(e, targetCanvas);
+      });
+
+      targetCanvas.addEventListener('pointerup', (e) => {
+        if (!state.isDragging || state.activeDrawSurface !== surfaceName) return;
+        e.preventDefault();
+        state.isDragging = false;
+        const x = Math.min(state.dragStart.x, state.dragCurrent.x);
+        const y = Math.min(state.dragStart.y, state.dragCurrent.y);
+        const w = Math.abs(state.dragCurrent.x - state.dragStart.x);
+        const h = Math.abs(state.dragCurrent.y - state.dragStart.y);
+
+        if (w > 0.01 && h > 0.01) {
+          const cand = state.candidates.find(c => c.id === state.drawingForCandidateId);
+          if (cand) {
+            cand.roi = { x, y, w, h };
+            addLog(`已直接在${surfaceName === 'yt' ? ' YouTube 播放器' : '預覽畫面'}框選「${cand.name}」的票數區域`, 'success');
+            showToast(`已綁定 ${cand.name} 的辨識框！`, 'success');
+          }
+        }
+        cancelDrawingMode();
+        renderCandidateConfigTable();
+      });
+    }
+
+    attachDrawingListeners(ytOverlayCanvas, 'yt');
+    attachDrawingListeners(canvasEl, 'secondary');
+
+    function startDrawingForCandidate(candId) {
+      const cand = state.candidates.find(c => c.id === candId);
+      if (!cand) return;
+      state.drawingForCandidateId = candId;
+
+      // Enable pointer events on YT overlay canvas so user can draw directly over YouTube iframe!
+      if (state.ytEmbedActive) {
+        ytOverlayCanvas.classList.remove('pointer-events-none');
+        ytOverlayCanvas.classList.add('pointer-events-auto', 'cursor-crosshair', 'bg-indigo-500/10');
+        document.getElementById('ytDrawingTargetLabel').textContent = `請直接在 YouTube 畫面上拖曳框選「${cand.name}」的得票數字...`;
+        document.getElementById('ytDrawingBanner').classList.remove('hidden');
+        ytStageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      // Also allow drawing on secondary canvas if user is using screenshot/mock stream
+      canvasEl.classList.add('cursor-crosshair');
+      document.getElementById('drawingTargetLabel').textContent = `請在畫面上拖曳滑鼠框選「${cand.name}」的得票數字區域...`;
+      document.getElementById('drawingBanner').classList.remove('hidden');
+    }
+
+    function cancelDrawingMode() {
+      state.drawingForCandidateId = null;
+      state.isDragging = false;
+      state.activeDrawSurface = null;
+
+      // Restore pointer-events-none so user can click play/pause/volume on YouTube iframe normally!
+      ytOverlayCanvas.classList.add('pointer-events-none');
+      ytOverlayCanvas.classList.remove('pointer-events-auto', 'cursor-crosshair', 'bg-indigo-500/10');
+      document.getElementById('ytDrawingBanner').classList.add('hidden');
+      document.getElementById('drawingBanner').classList.add('hidden');
+    }
+
+    document.getElementById('btnCancelYtDraw').addEventListener('click', cancelDrawingMode);
+    document.getElementById('btnCancelDraw').addEventListener('click', cancelDrawingMode);
+
+    // ==========================================
+    // 7. Image Preprocessing & OCR Execution
+    // ==========================================
+    function preprocessROIImage(roi, threshold) {
+      const scale = 2.5;
+
+      if (state.mockStreamRunning) {
+        const srcW = 1280, srcH = 720;
+        const sx = Math.floor(roi.x * srcW);
+        const sy = Math.floor(roi.y * srcH);
+        const sw = Math.max(10, Math.floor(roi.w * srcW));
+        const sh = Math.max(10, Math.floor(roi.h * srcH));
+        offscreenCanvas.width = Math.floor(sw * scale);
+        offscreenCanvas.height = Math.floor(sh * scale);
+
+        const tempFull = document.createElement('canvas');
+        tempFull.width = srcW;
+        tempFull.height = srcH;
+        drawMockBroadcastFrame(tempFull.getContext('2d'), srcW, srcH);
+        offscreenCtx.drawImage(tempFull, sx, sy, sw, sh, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
+      } else if (uploadedImageObj) {
+        const srcW = 1280, srcH = 720;
+        const sx = Math.floor(roi.x * srcW);
+        const sy = Math.floor(roi.y * srcH);
+        const sw = Math.max(10, Math.floor(roi.w * srcW));
+        const sh = Math.max(10, Math.floor(roi.h * srcH));
+        offscreenCanvas.width = Math.floor(sw * scale);
+        offscreenCanvas.height = Math.floor(sh * scale);
+
+        const tempFull = document.createElement('canvas');
+        tempFull.width = srcW;
+        tempFull.height = srcH;
+        const tCtx = tempFull.getContext('2d');
+        tCtx.fillStyle = '#020617';
+        tCtx.fillRect(0, 0, srcW, srcH);
+        const fitScale = Math.min(srcW / uploadedImageObj.width, srcH / uploadedImageObj.height);
+        const drawW = uploadedImageObj.width * fitScale;
+        const drawH = uploadedImageObj.height * fitScale;
+        tCtx.drawImage(uploadedImageObj, (srcW - drawW) / 2, (srcH - drawH) / 2, drawW, drawH);
+        offscreenCtx.drawImage(tempFull, sx, sy, sw, sh, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
+      } else if (videoEl.readyState >= 2) {
+        const vw = videoEl.videoWidth || 1280;
+        const vh = videoEl.videoHeight || 720;
+        const sx = Math.floor(roi.x * vw);
+        const sy = Math.floor(roi.y * vh);
+        const sw = Math.max(10, Math.floor(roi.w * vw));
+        const sh = Math.max(10, Math.floor(roi.h * vh));
+        offscreenCanvas.width = Math.floor(sw * scale);
+        offscreenCanvas.height = Math.floor(sh * scale);
+        offscreenCtx.drawImage(videoEl, sx, sy, sw, sh, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
+      } else {
+        return null;
+      }
+
+      const imgData = offscreenCtx.getImageData(0, 0, offscreenCanvas.width, offscreenCanvas.height);
+      const data = imgData.data;
+
+      let darkPixels = 0;
+      const totalPixels = data.length / 4;
+      for (let i = 0; i < data.length; i += 4) {
+        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        if (lum < 128) darkPixels++;
+      }
+      const isDarkBg = darkPixels > totalPixels * 0.5;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        let val = lum >= threshold ? 255 : 0;
+        if (isDarkBg) val = 255 - val;
+        data[i] = val;
+        data[i + 1] = val;
+        data[i + 2] = val;
+        data[i + 3] = 255;
+      }
+      offscreenCtx.putImageData(imgData, 0, 0);
+      return offscreenCanvas;
+    }
+
+    async function executeOCRAllROIs() {
+      if (!tesseractWorker) return;
+      const activeROIs = state.candidates.filter(c => c.roi !== null);
+      if (activeROIs.length === 0) return;
+
+      // Ensure video/image source is available
+      if (!state.mockStreamRunning && !uploadedImageObj && videoEl.readyState < 2) {
+        return;
+      }
+
+      const threshold = parseInt(document.getElementById('thresholdRange').value, 10);
+      const monotonic = document.getElementById('chkMonotonic').checked;
+      let anyUpdated = false;
+
+      // Briefly hide colored box borders on YT overlay during snapshot so OCR reads clean numbers
+      state.isCapturingFrame = true;
+      ytOverlayCtx.clearRect(0, 0, ytOverlayCanvas.width, ytOverlayCanvas.height);
+      await new Promise(r => setTimeout(r, 40));
+
+      for (const cand of activeROIs) {
+        const processedCanvas = preprocessROIImage(cand.roi, threshold);
+        if (!processedCanvas) continue;
+
+        try {
+          const { data: { text } } = await tesseractWorker.recognize(processedCanvas);
+          const digitsOnly = text.replace(/[^0-9]/g, '');
+          if (digitsOnly.length > 0) {
+            const parsedNum = parseInt(digitsOnly, 10);
+            if (!isNaN(parsedNum)) {
+              if (monotonic && parsedNum < cand.votes) {
+                addLog(`[略過異常] ${cand.name} 辨識為 ${parsedNum.toLocaleString()} (低於目前 ${cand.votes.toLocaleString()})`, 'warn');
+              } else if (parsedNum !== cand.votes) {
+                cand.votes = parsedNum;
+                cand.lastRawText = text.trim();
+                anyUpdated = true;
+                addLog(`[OCR 更新] ${cand.name} -> ${parsedNum.toLocaleString()} 票`, 'success');
+              }
+            }
+          }
+        } catch (e) {
+          addLog(`[OCR 錯誤] ${cand.name}: ${e.message}`, 'error');
+        }
+      }
+
+      state.isCapturingFrame = false;
+
+      if (anyUpdated) {
+        updateDashboardUI();
+        recordChartPoint();
+      }
+    }
+
+    async function toggleOCRProcess() {
+      const btn = document.getElementById('btnToggleOCR');
+      if (state.ocrRunning) {
+        state.ocrRunning = false;
+        if (state.ocrTimer) clearInterval(state.ocrTimer);
+        btn.className = 'w-full sm:w-auto px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-600/20';
+        btn.innerHTML = `<i data-lucide="play" class="w-3.5 h-3.5"></i><span>啟動自動 OCR</span>`;
+        addLog('已暫停自動 OCR 辨識', 'warn');
+        refreshIcons();
+      } else {
+        const hasROI = state.candidates.some(c => c.roi !== null);
+        if (!hasROI) {
+          showToast('請先為至少一位候選人框選票數區域！', 'warn');
+          return;
+        }
+
+        // Ensure a local image, local video, or mock broadcast stream is active (no screen sharing)
+        if (!state.mockStreamRunning && !uploadedImageObj && videoEl.readyState < 2) {
+          showToast('請先點擊「上傳截圖/影片」或「模擬開票測試」載入畫面來源！', 'warn');
+          return;
+        }
+
+        state.ocrRunning = true;
+        const intervalMs = parseInt(document.getElementById('ocrIntervalSelect').value, 10);
+        btn.className = 'w-full sm:w-auto px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/20';
+        btn.innerHTML = `<i data-lucide="square" class="w-3.5 h-3.5"></i><span>停止自動 OCR</span>`;
+        addLog(`啟動自動 OCR 辨識 (間隔 ${intervalMs / 1000} 秒)`, 'success');
+        refreshIcons();
+
+        executeOCRAllROIs();
+        state.ocrTimer = setInterval(executeOCRAllROIs, intervalMs);
+      }
+    }
+
+    // ==========================================
+    // 8. YouTube Live Chat API & Simulator
+    // ==========================================
+    function processChatMessage(authorId, authorName, messageText) {
+      const dedupe = document.getElementById('chkDedupeUser').checked;
+      if (dedupe && state.votedUsers.has(authorId)) return false;
+
+      const lowerMsg = messageText.trim().toLowerCase();
+      for (const cand of state.candidates) {
+        const matched = cand.keywords.some(kw => {
+          const k = kw.trim().toLowerCase();
+          return k && (lowerMsg === k || lowerMsg.includes(k));
+        });
+        if (matched) {
+          cand.votes += 1;
+          if (dedupe) state.votedUsers.add(authorId);
+          appendChatBubble(authorName, messageText, cand);
+          return true;
+        }
+      }
+      appendChatBubble(authorName, messageText, null);
+      return false;
+    }
+
+    function appendChatBubble(author, text, matchedCand) {
+      const feed = document.getElementById('chatFeedContainer');
+      if (feed.children.length === 1 && feed.children[0].classList.contains('text-center')) {
+        feed.innerHTML = '';
+      }
+      const row = document.createElement('div');
+      row.className = 'text-xs flex items-center gap-2 py-1 px-2 rounded bg-slate-900/80';
+      if (matchedCand) {
+        row.innerHTML = `
+          <span class="px-1.5 py-0.5 rounded text-[10px] font-bold text-white" style="background:${matchedCand.color}">+1 ${matchedCand.name}</span>
+          <span class="font-semibold text-slate-300">${author}:</span>
+          <span class="text-white">${text}</span>
+        `;
+      } else {
+        row.innerHTML = `
+          <span class="font-semibold text-slate-500">${author}:</span>
+          <span class="text-slate-400">${text}</span>
+        `;
+      }
+      feed.prepend(row);
+      if (feed.children.length > 50) feed.removeChild(feed.lastChild);
+    }
+
+    function toggleSimulatedChat() {
+      const btn = document.getElementById('btnSimulateChat');
+      if (state.chatRunning) {
+        state.chatRunning = false;
+        clearInterval(state.chatTimer);
+        btn.innerHTML = `<i data-lucide="sparkles" class="w-3.5 h-3.5"></i>啟動模擬聊天室湧入`;
+        setLiveBadge(false, '待機中');
+        refreshIcons();
+      } else {
+        state.chatRunning = true;
+        btn.innerHTML = `<i data-lucide="square" class="w-3.5 h-3.5"></i>停止模擬聊天室`;
+        setLiveBadge(true, '聊天室即時掃描中');
+        refreshIcons();
+
+        const sampleNames = ['TaiwanNo1', '小明愛台灣', 'HsinchuDev', 'MaydayFan', '熱血開票迷', '阿豪', 'Yuki_TW', 'JasonLin'];
+        const sampleTexts = ['+1', '1號加油！', '支持2號林志豪', '+2', '3號凍蒜', '1', '2', '路過推一個', '+1 +1'];
+
+        state.chatTimer = setInterval(() => {
+          const uid = 'user_' + Math.floor(Math.random() * 5000);
+          const name = sampleNames[Math.floor(Math.random() * sampleNames.length)] + '_' + Math.floor(Math.random() * 99);
+          const msg = sampleTexts[Math.floor(Math.random() * sampleTexts.length)];
+          if (processChatMessage(uid, name, msg)) updateDashboardUI();
+        }, 650);
+
+        setInterval(() => {
+          if (state.chatRunning) recordChartPoint();
+        }, 3000);
+      }
+    }
+
+    async function connectYouTubeChat() {
+      const apiKey = document.getElementById('ytApiKey').value.trim();
+      const rawVid = document.getElementById('ytVideoId').value.trim();
+      if (!apiKey || !rawVid) {
+        showToast('請輸入 YouTube API Key 與直播影片 ID', 'warn');
+        return;
+      }
+      const videoId = extractYouTubeVideoId(rawVid) || rawVid;
+      try {
+        addLog(`正在查詢影片 ${videoId} 的 LiveChatId...`, 'info');
+        const res = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${videoId}&key=${apiKey}`);
+        const data = await res.json();
+        if (!data.items || data.items.length === 0) throw new Error('找不到該影片或 API Key 無效');
+        const liveChatId = data.items[0].liveStreamingDetails?.activeLiveChatId;
+        if (!liveChatId) throw new Error('此影片目前沒有開啟中的直播聊天室');
+        addLog(`成功取得 LiveChatId: ${liveChatId}，開始輪詢留言`, 'success');
+        setLiveBadge(true, 'YouTube API 連線中');
+
+        let nextPageToken = '';
+        const pollChat = async () => {
+          const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${liveChatId}&part=snippet,authorDetails&key=${apiKey}${nextPageToken ? '&pageToken=' + nextPageToken : ''}`;
+          const chatRes = await fetch(url);
+          const chatData = await chatRes.json();
+          if (chatData.items) {
+            let updated = false;
+            chatData.items.forEach(item => {
+              if (processChatMessage(item.authorDetails.channelId, item.authorDetails.displayName, item.snippet.displayMessage)) {
+                updated = true;
+              }
+            });
+            if (updated) {
+              updateDashboardUI();
+              recordChartPoint();
+            }
+          }
+          nextPageToken = chatData.nextPageToken || '';
+          state.chatTimer = setTimeout(pollChat, Math.max(2000, chatData.pollingIntervalMillis || 3000));
+        };
+        pollChat();
+      } catch (err) {
+        addLog('YouTube API 連線失敗: ' + err.message, 'error');
+        showToast('連線失敗：' + err.message, 'error');
+      }
+    }
+
+    // ==========================================
+    // 9. UI Rendering & Candidate Management
+    // ==========================================
+    function renderCandidateConfigTable() {
+      const tbody = document.getElementById('candidateConfigBody');
+      tbody.innerHTML = '';
+
+      state.candidates.forEach(cand => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-800/40 transition';
+
+        const roiStatus = cand.roi
+          ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[11px]">已框選</span>`
+          : `<span class="text-slate-500 text-[11px]">未設定</span>`;
+
+        tr.innerHTML = `
+          <td class="py-2.5 px-2">
+            <input type="color" value="${cand.color}" data-id="${cand.id}" class="cand-color-input w-7 h-7 rounded cursor-pointer bg-transparent border-0" />
+          </td>
+          <td class="py-2.5 px-2">
+            <input type="text" value="${cand.name}" data-id="${cand.id}" class="cand-name-input bg-slate-950 border border-slate-700 rounded px-2 py-1 text-white w-32 sm:w-36 focus:outline-none focus:border-indigo-500" />
+          </td>
+          <td class="py-2.5 px-2">
+            <div class="flex items-center gap-2">
+              <button data-id="${cand.id}" class="btn-draw-roi px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold transition flex items-center gap-1 shadow">
+                <i data-lucide="crop" class="w-3 h-3"></i>
+                框選票數區
+              </button>
+              ${roiStatus}
+            </div>
+          </td>
+          <td class="py-2.5 px-2">
+            <input type="text" value="${cand.keywords.join(', ')}" data-id="${cand.id}" class="cand-kw-input bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-300 w-36 focus:outline-none focus:border-rose-500" />
+          </td>
+          <td class="py-2.5 px-2 text-right">
+            <input type="number" value="${cand.votes}" data-id="${cand.id}" class="cand-votes-input bg-slate-950 border border-slate-700 rounded px-2 py-1 text-right text-white font-mono w-24 focus:outline-none focus:border-emerald-500" />
+          </td>
+          <td class="py-2.5 px-2 text-center">
+            <button data-id="${cand.id}" class="btn-del-cand text-slate-500 hover:text-rose-400 p-1 transition" title="刪除選項">
+              <i data-lucide="trash-2" class="w-4 h-4"></i>
+            </button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      document.querySelectorAll('.cand-color-input').forEach(el => {
+        el.addEventListener('change', e => {
+          const c = state.candidates.find(x => x.id === e.target.dataset.id);
+          if (c) { c.color = e.target.value; updateDashboardUI(); syncChartDatasets(); }
+        });
+      });
+
+      document.querySelectorAll('.cand-name-input').forEach(el => {
+        el.addEventListener('input', e => {
+          const c = state.candidates.find(x => x.id === e.target.dataset.id);
+          if (c) { c.name = e.target.value; updateDashboardUI(); syncChartDatasets(); }
+        });
+      });
+
+      document.querySelectorAll('.cand-kw-input').forEach(el => {
+        el.addEventListener('change', e => {
+          const c = state.candidates.find(x => x.id === e.target.dataset.id);
+          if (c) { c.keywords = e.target.value.split(',').map(s => s.trim()).filter(Boolean); }
+        });
+      });
+
+      document.querySelectorAll('.cand-votes-input').forEach(el => {
+        el.addEventListener('change', e => {
+          const c = state.candidates.find(x => x.id === e.target.dataset.id);
+          if (c) {
+            c.votes = Math.max(0, parseInt(e.target.value, 10) || 0);
+            updateDashboardUI();
+            recordChartPoint();
+          }
+        });
+      });
+
+      document.querySelectorAll('.btn-draw-roi').forEach(el => {
+        el.addEventListener('click', e => {
+          startDrawingForCandidate(e.currentTarget.dataset.id);
+        });
+      });
+
+      document.querySelectorAll('.btn-del-cand').forEach(el => {
+        el.addEventListener('click', e => {
+          if (state.candidates.length <= 1) {
+            showToast('至少需保留一位候選人或選項', 'warn');
+            return;
+          }
+          const id = e.currentTarget.dataset.id;
+          state.candidates = state.candidates.filter(c => c.id !== id);
+          delete state.historySeries[id];
+          renderCandidateConfigTable();
+          updateDashboardUI();
+          syncChartDatasets();
+        });
+      });
+
+      refreshIcons();
+    }
+
+    function updateDashboardUI() {
+      const sorted = [...state.candidates].sort((a, b) => b.votes - a.votes);
+      const total = sorted.reduce((acc, c) => acc + c.votes, 0);
+      const leadMargin = sorted.length >= 2 ? (sorted[0].votes - sorted[1].votes) : (sorted[0]?.votes || 0);
+
+      document.getElementById('totalVotesDisplay').textContent = total.toLocaleString('en-US');
+      document.getElementById('leadMarginDisplay').textContent = '+' + leadMargin.toLocaleString('en-US');
+      document.getElementById('lastUpdatedTime').textContent = '最後更新: ' + new Date().toLocaleTimeString('zh-TW', { hour12: false });
+
+      const listEl = document.getElementById('scoreboardList');
+      listEl.innerHTML = '';
+
+      sorted.forEach((cand, idx) => {
+        const pct = total > 0 ? ((cand.votes / total) * 100).toFixed(1) : '0.0';
+        const isLeader = idx === 0 && cand.votes > 0;
+
+        const card = document.createElement('div');
+        card.className = `p-3 rounded-lg border transition ${isLeader ? 'bg-slate-950 border-amber-500/50 shadow-lg shadow-amber-500/5' : 'bg-slate-950/70 border-slate-800'}`;
+        card.innerHTML = `
+          <div class="flex items-center justify-between mb-1.5">
+            <div class="flex items-center gap-2">
+              <span class="w-5 h-5 rounded text-[11px] font-bold flex items-center justify-center text-white" style="background:${cand.color}">${idx + 1}</span>
+              <span class="font-bold text-sm text-white">${cand.name}</span>
+              ${isLeader ? '<span class="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 text-[10px] font-bold border border-amber-500/30">領先</span>' : ''}
+            </div>
+            <div class="text-right">
+              <span class="font-black text-base sm:text-lg text-white tabular-nums">${cand.votes.toLocaleString('en-US')}</span>
+              <span class="text-xs text-slate-400 ml-1 tabular-nums">(${pct}%)</span>
+            </div>
+          </div>
+          <div class="w-full h-2.5 bg-slate-900 rounded-full overflow-hidden">
+            <div class="h-full rounded-full transition-all duration-500" style="width: ${pct}%; background-color: ${cand.color}"></div>
+          </div>
+        `;
+        listEl.appendChild(card);
+      });
+
+      document.querySelectorAll('.cand-votes-input').forEach(input => {
+        const cand = state.candidates.find(c => c.id === input.dataset.id);
+        if (cand && document.activeElement !== input) input.value = cand.votes;
+      });
+
+      state.logsData.push({
+        time: new Date().toISOString(),
+        votes: Object.fromEntries(state.candidates.map(c => [c.name, c.votes]))
+      });
+    }
+
+    // ==========================================
+    // 10. Event Bindings & Bootstrapping
+    // ==========================================
+    document.getElementById('btnModeOCR').addEventListener('click', () => {
+      state.mode = 'ocr';
+      document.getElementById('panelOCR').classList.remove('hidden');
+      document.getElementById('panelChat').classList.add('hidden');
+      document.getElementById('btnModeOCR').className = 'px-3 py-1.5 rounded-md bg-indigo-600 text-white shadow transition flex items-center gap-1.5';
+      document.getElementById('btnModeChat').className = 'px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition flex items-center gap-1.5';
+    });
+
+    document.getElementById('btnModeChat').addEventListener('click', () => {
+      state.mode = 'chat';
+      document.getElementById('panelChat').classList.remove('hidden');
+      document.getElementById('panelOCR').classList.add('hidden');
+      document.getElementById('btnModeChat').className = 'px-3 py-1.5 rounded-md bg-rose-600 text-white shadow transition flex items-center gap-1.5';
+      document.getElementById('btnModeOCR').className = 'px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition flex items-center gap-1.5';
+    });
+
+    document.getElementById('btnStartMockStream').addEventListener('click', () => startMockBroadcastStream(true));
+    document.getElementById('btnToggleOCR').addEventListener('click', toggleOCRProcess);
+    document.getElementById('btnSimulateChat').addEventListener('click', toggleSimulatedChat);
+    document.getElementById('btnConnectChat').addEventListener('click', connectYouTubeChat);
+
+    document.getElementById('thresholdRange').addEventListener('input', (e) => {
+      document.getElementById('thresholdVal').textContent = e.target.value;
+    });
+
+    document.getElementById('btnAddCandidate').addEventListener('click', () => {
+      const palette = ['#ec4899', '#8b5cf6', '#06b6d4', '#84cc16', '#f97316'];
+      const nextNum = state.candidates.length + 1;
+      const color = palette[(nextNum - 1) % palette.length];
+      state.candidates.push({
+        id: 'c_' + Date.now(),
+        name: `${nextNum}號 新候選人`,
+        color,
+        votes: 0,
+        roi: null,
+        keywords: [`${nextNum}`, `+${nextNum}`, `${nextNum}號`],
+        lastRawText: ''
+      });
+      renderCandidateConfigTable();
+      updateDashboardUI();
+      syncChartDatasets();
+    });
+
+    document.getElementById('btnResetStats').addEventListener('click', () => {
+      state.candidates.forEach(c => c.votes = 0);
+      state.votedUsers.clear();
+      state.historyTimestamps = [];
+      state.historySeries = {};
+      state.logsData = [];
+      renderCandidateConfigTable();
+      updateDashboardUI();
+      syncChartDatasets();
+      addLog('所有得票統計數據與歷史曲線已歸零重計', 'warn');
+      showToast('統計數據已歸零', 'info');
+    });
+
+    document.getElementById('btnExportCSV').addEventListener('click', () => {
+      if (state.logsData.length === 0) {
+        showToast('目前尚無開票數據可供匯出', 'warn');
+        return;
+      }
+      const headers = ['Timestamp', ...state.candidates.map(c => c.name)];
+      const rows = state.logsData.map(entry => {
+        return [entry.time, ...state.candidates.map(c => entry.votes[c.name] ?? 0)].join(',');
+      });
+      const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `youtube_live_votes_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('已匯出 CSV 開票紀錄檔', 'success');
+    });
+
+    // Boot
+    window.addEventListener('DOMContentLoaded', () => {
+      refreshIcons();
+      checkProtocolEnvironment();
+      renderCandidateConfigTable();
+      updateDashboardUI();
+      initChart();
+      initTesseract();
+      requestAnimationFrame(renderCanvasLoop);
+
+      const params = new URLSearchParams(window.location.search);
+      const urlParam = params.get('url');
+      if (urlParam) {
+        document.getElementById('ytUrlInput').value = urlParam;
+        const vid = extractYouTubeVideoId(urlParam);
+        if (vid) mountYouTubePlayer(vid, 'official');
+      }
+    });
+  </script>
+</body>
+</html>
